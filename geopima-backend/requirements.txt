@@ -1,0 +1,8 @@
+Django>=5.2,<5.3
+djangorestframework>=3.16
+djangorestframework-simplejwt>=5.5
+django-cors-headers>=4.9
+django-filter>=25.1
+psycopg2-binary>=2.9
+Pillow>=11.0
+python-dotenv>=1.0
