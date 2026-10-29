@@ -7,7 +7,7 @@ class AgencyProfile(models.Model):
         ('manual', 'Manual transition'),
     ]
 
-    company_name = models.CharField(max_length=255, default="Pemwa Agency")
+    company_name = models.CharField(max_length=255, default="GeoPima")
     short_name = models.CharField(max_length=50, blank=True, null=True)
     motto_slogan = models.CharField(max_length=255, default='"Your Comfort Our Concern"')
     contact = models.CharField(max_length=20)

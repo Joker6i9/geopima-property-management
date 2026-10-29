@@ -220,6 +220,7 @@ class PropertySerializer(serializers.ModelSerializer):
 
 class UnitSerializer(serializers.ModelSerializer):
     property_name = serializers.ReadOnlyField(source='property.name', default='')
+    property_pk = serializers.ReadOnlyField(source='property_id')
     
     # Expect and process string property_id values as primary lookup reference
     property = serializers.SlugRelatedField(
@@ -252,6 +253,7 @@ class UnitSerializer(serializers.ModelSerializer):
             'unitName', 
             'property', 
             'property_name', 
+            'property_pk',
             'landlord_name', 
             'rent_amount',
             'deposit',

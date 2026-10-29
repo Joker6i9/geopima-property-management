@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     'properties',
     'billing',
     'mpesa',
+    'portal',
 ]
 
 MIDDLEWARE = [
@@ -84,17 +85,21 @@ WSGI_APPLICATION = 'geopima_core.wsgi.application'
 
 
 # Database
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.environ.get('DB_NAME', 'geopima_db'),
-        'USER': os.environ.get('DB_USER', 'postgres'),
-        'PASSWORD': os.environ['DB_PASSWORD'],
-        'HOST': os.environ.get('DB_HOST', 'localhost'),
-        'PORT': os.environ.get('DB_PORT', '5432'),
-        'OPTIONS': {'sslmode': os.environ.get('DB_SSLMODE', 'prefer')},
+if os.environ.get('DB_ENGINE', 'postgres') == 'sqlite':
+    # Lightweight option for local checks and tests; production uses Postgres.
+    DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': BASE_DIR / 'local.sqlite3'}}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.environ.get('DB_NAME', 'geopima_db'),
+            'USER': os.environ.get('DB_USER', 'postgres'),
+            'PASSWORD': os.environ['DB_PASSWORD'],
+            'HOST': os.environ.get('DB_HOST', 'localhost'),
+            'PORT': os.environ.get('DB_PORT', '5432'),
+            'OPTIONS': {'sslmode': os.environ.get('DB_SSLMODE', 'prefer')},
+        }
     }
-}
 
 
 # Password validation
@@ -148,12 +153,19 @@ REST_FRAMEWORK = {
 
 # Simple JWT Configuration
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(days=1),
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=int(os.environ.get('JWT_ACCESS_MINUTES', '60'))),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
+
+
+# M-Pesa C2B callbacks are served at /api/v1/mpesa/c2b/<secret>/confirmation/ (and /validation/). Use a long random
+# value; with none set the callbacks are closed outside DEBUG.
+MPESA_CALLBACK_SECRET = os.environ.get('MPESA_CALLBACK_SECRET', '')
+# Shown to tenants as the business number to pay to.
+MPESA_PAYBILL = os.environ.get('MPESA_PAYBILL', '')
 
 
 # CORS Configuration

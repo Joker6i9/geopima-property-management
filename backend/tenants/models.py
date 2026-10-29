@@ -37,7 +37,7 @@ class Tenant(models.Model):
     phone_number = models.CharField(max_length=20)
     email = models.EmailField(blank=True, null=True)
     unit = models.ForeignKey(Unit, on_delete=models.SET_NULL, null=True, blank=True, related_name='tenants')
-    entry_date = models.DateField(default=timezone.now)
+    entry_date = models.DateField(default=timezone.localdate)
     due_date = models.PositiveIntegerField(default=5)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
 

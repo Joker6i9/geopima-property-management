@@ -1,4 +1,6 @@
 from rest_framework import serializers
+
+from properties.models import Unit
 from .models import Tenant, LeaseAgreement
 
 
@@ -65,3 +67,13 @@ class LeaseAgreementSerializer(serializers.ModelSerializer):
             'created_at',
         ]
         read_only_fields = ['id', 'created_at']
+
+
+class MoveInSerializer(serializers.Serializer):
+    unit = serializers.PrimaryKeyRelatedField(queryset=Unit.objects.all())
+    name = serializers.CharField(max_length=255)
+    phone_number = serializers.CharField(max_length=20)
+    email = serializers.EmailField(required=False, allow_blank=True, allow_null=True)
+    start_date = serializers.DateField()
+    end_date = serializers.DateField(required=False, allow_null=True)
+    due_date = serializers.IntegerField(required=False, default=5, min_value=1, max_value=28)
