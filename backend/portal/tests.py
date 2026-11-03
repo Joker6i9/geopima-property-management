@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from django.test import TestCase, override_settings
@@ -8,12 +8,14 @@ from billing.services import generate_invoices
 from config_core.testing import client_for, make_property, make_tenant, make_unit, make_user
 from mpesa.services import MpesaSettlementEngine
 
-OCT = date(2026, 10, 1)
+# The portal reports the current month, so the fixture bills the current month.
+OCT = date.today().replace(day=1)
+PREV = (OCT - timedelta(days=1)).replace(day=1)
 
 
 def pay(tenant, amount, trans_id):
     MpesaSettlementEngine.process_payment({
-        'TransID': trans_id, 'TransTime': '20261010120000', 'TransAmount': str(amount),
+        'TransID': trans_id, 'TransTime': OCT.strftime('%Y%m') + '10120000', 'TransAmount': str(amount),
         'BusinessShortCode': '123456', 'BillRefNumber': tenant.unit.unit_name, 'MSISDN': tenant.phone_number,
         'FirstName': 'X', 'LastName': 'Y',
     })
@@ -149,10 +151,10 @@ class LandlordPortalTests(PortalFixture):
         self.assertEqual(data['property']['occupancy'], 50)
 
     def test_statements_group_by_month_and_property(self):
-        generate_invoices(date(2026, 9, 1), today=OCT)
+        generate_invoices(PREV, today=OCT)
         pay(self.tenant, 1000, 'QJ1')
         rows = self.client.get('/api/v1/portal/landlord/statements/?months=60').json()['rows']
-        self.assertEqual([r['period'] for r in rows], ['2026-10', '2026-09'])
+        self.assertEqual([r['period'] for r in rows], [OCT.strftime('%Y-%m'), PREV.strftime('%Y-%m')])
         self.assertTrue(all(r['property'] == 'Riverside' for r in rows))
         self.assertEqual(sum(Decimal(r['commission']) for r in rows), Decimal('100.00'))
 
