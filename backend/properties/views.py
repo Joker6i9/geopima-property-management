@@ -1,7 +1,9 @@
-from rest_framework import viewsets, filters, status
+from rest_framework import filters, viewsets
+from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import AllowAny, IsAuthenticated
 
+from config_core.permissions import PORTFOLIO, STAFF, RolePermission
+from tenants.serializers import TenantSerializer
 from properties.models import Landlord, Property, Unit
 from .serializers import LandlordSerializer, PropertySerializer, UnitSerializer
 
@@ -12,7 +14,9 @@ class LandlordViewSet(viewsets.ModelViewSet):
     """
     queryset = Landlord.objects.all()
     serializer_class = LandlordSerializer
-    permission_classes = [AllowAny]
+    permission_classes = [RolePermission]
+    read_roles = STAFF
+    write_roles = PORTFOLIO
     http_method_names = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options']
     filter_backends = [filters.SearchFilter]
     search_fields = ['name', 'landlord_id', 'phone_number', 'address']
@@ -23,12 +27,13 @@ class LandlordViewSet(viewsets.ModelViewSet):
 
 class PropertyViewSet(viewsets.ModelViewSet):
     """
-    API ViewSet for managing Property records. Includes validation error logging for POST/PUT debugging.
-    Supports filtering properties by landlord primary key via ?landlord=<id>.
+    API ViewSet for managing Property records. Supports filtering properties by landlord primary key via ?landlord=<id>.
     """
     queryset = Property.objects.all()
     serializer_class = PropertySerializer
-    permission_classes = [AllowAny]
+    permission_classes = [RolePermission]
+    read_roles = STAFF
+    write_roles = PORTFOLIO
     http_method_names = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options']
     filter_backends = [filters.SearchFilter]
     search_fields = ['name', 'property_id', 'location', 'landlord__name']
@@ -44,33 +49,8 @@ class PropertyViewSet(viewsets.ModelViewSet):
         landlord_param = self.request.query_params.get('landlord')
         if landlord_param:
             queryset = queryset.filter(landlord_id=landlord_param)
-            
+
         return queryset
-
-    def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        if not serializer.is_valid():
-            print("--- POST /api/v1/properties/ VALIDATION ERRORS ---")
-            print(serializer.errors)
-            print("--------------------------------------------------")
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        
-        self.perform_create(serializer)
-        headers = self.get_success_headers(serializer.data)
-        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
-
-    def update(self, request, *args, **kwargs):
-        partial = kwargs.pop('partial', False)
-        instance = self.get_object()
-        serializer = self.get_serializer(instance, data=request.data, partial=partial)
-        if not serializer.is_valid():
-            print(f"--- PUT/PATCH /api/v1/properties/{instance.property_id}/ VALIDATION ERRORS ---")
-            print(serializer.errors)
-            print("--------------------------------------------------")
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-        self.perform_update(serializer)
-        return Response(serializer.data)
 
 
 class UnitViewSet(viewsets.ModelViewSet):
@@ -80,7 +60,9 @@ class UnitViewSet(viewsets.ModelViewSet):
     """
     queryset = Unit.objects.all()
     serializer_class = UnitSerializer
-    permission_classes = [AllowAny]
+    permission_classes = [RolePermission]
+    read_roles = STAFF
+    write_roles = PORTFOLIO
     http_method_names = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options']
     filter_backends = [filters.SearchFilter]
     search_fields = ['unit_no', 'unit_name', 'property__name', 'property__property_id']
@@ -120,3 +102,10 @@ class UnitViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(status__iexact=status_param)
             
         return queryset
+
+    @action(detail=True, methods=['get'])
+    def tenants(self, request, pk=None):
+        """Tenants currently in this unit."""
+        unit = self.get_object()
+        current = unit.tenants.exclude(status='vacated').select_related('unit__property__landlord')
+        return Response(TenantSerializer(current, many=True).data)

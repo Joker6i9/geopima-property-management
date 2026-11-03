@@ -1,57 +1,30 @@
-from rest_framework import viewsets, filters, status
+from datetime import datetime
+
+from rest_framework import filters, serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.views import APIView
-from rest_framework.permissions import IsAuthenticated, AllowAny
-from django.core.management import call_command
-from .models import VoteHead, Deposit, Invoice
-from .serializers import (
-    VoteHeadSerializer, 
-    DepositSerializer, 
-    InvoiceDetailSerializer
-)
+
+from config_core.permissions import FINANCE, STAFF, RolePermission
+from tenants.models import Tenant
+from .models import Deposit, Invoice, VoteHead
+from .serializers import DepositSerializer, InvoiceDetailSerializer, VoteHeadSerializer
+from .services import first_of_month, generate_invoices, mark_overdue
 
 
-class DashboardMetricsView(APIView):
-    """
-    API View for population & unit occupancy chart metrics.
-    """
-    authentication_classes = []  # Disables global authentication backends
-    permission_classes = [AllowAny]
-
-    def get(self, request):
-        data = {
-            "properties": ["Block A", "Block B", "Block C", "Block D"],
-            "total_units": [40, 25, 30, 15],
-            "occupied_units": [35, 20, 28, 10]
-        }
-        return Response(data, status=status.HTTP_200_OK)
-
-
-class PaymentSummariesView(APIView):
-    """
-    API View for progress bars showing rent collection summaries.
-    """
-    authentication_classes = []  # Disables global authentication backends
-    permission_classes = [AllowAny]
-
-    def get(self, request):
-        data = [
-            {"name": "Rent Collection", "collected": 450000, "total": 500000, "pct": 90},
-            {"name": "Water Collection", "collected": 18000, "total": 20000, "pct": 90},
-            {"name": "Garbage Collection", "collected": 5000, "total": 10000, "pct": 50}
-        ]
-        return Response(data, status=status.HTTP_200_OK)
+def parse_period(value: str):
+    try:
+        return datetime.strptime(value, '%Y-%m').date()
+    except (TypeError, ValueError):
+        raise serializers.ValidationError({'period': 'Use the format YYYY-MM, e.g. 2026-10.'})
 
 
 class VoteHeadViewSet(viewsets.ModelViewSet):
-    """
-    API ViewSet for managing Vote Heads.
-    Supports list, create, update, delete, and ordering capabilities.
-    """
+    """Charge types and the order payments are applied in."""
     queryset = VoteHead.objects.all().order_by('priority_order')
     serializer_class = VoteHeadSerializer
-    permission_classes = [AllowAny]
+    permission_classes = [RolePermission]
+    read_roles = STAFF
+    write_roles = FINANCE
     filter_backends = [filters.SearchFilter]
     search_fields = ['name', 'title', 'code']
 
@@ -64,76 +37,74 @@ class VoteHeadViewSet(viewsets.ModelViewSet):
 
 
 class DepositViewSet(viewsets.ModelViewSet):
-    """
-    API ViewSet for managing Tenant Deposits.
-    """
-    queryset = Deposit.objects.select_related('tenant', 'unit').all().order_by('-id')
+    """Tenant deposits. A deposit can be refunded once its tenant has vacated."""
+    queryset = Deposit.objects.select_related('tenant', 'unit__property').order_by('-created_at')
     serializer_class = DepositSerializer
-    permission_classes = [AllowAny]
+    permission_classes = [RolePermission]
+    read_roles = STAFF
+    write_roles = FINANCE
     filter_backends = [filters.SearchFilter]
     search_fields = ['deposit_code', 'reference_no', 'tenant__name', 'tenant__tenant_id']
 
+    @action(detail=True, methods=['post'])
+    def refund(self, request, pk=None):
+        deposit = self.get_object()
+        if deposit.status == 'refunded':
+            raise serializers.ValidationError({'detail': 'This deposit has already been refunded.'})
+        if deposit.tenant.status != 'vacated':
+            raise serializers.ValidationError({'detail': 'A deposit can only be refunded after the tenant has vacated.'})
+        deposit.status = 'refunded'
+        deposit.save(update_fields=['status'])
+        return Response(self.get_serializer(deposit).data)
 
-class InvoiceViewSet(viewsets.ModelViewSet):
+
+class InvoiceViewSet(viewsets.ReadOnlyModelViewSet):
     """
-    API ViewSet for managing Invoices and PDF detail rendering.
-    Includes custom action to trigger automated monthly billing.
+    Invoices. They are created by billing, never edited by hand: use `generate-monthly` for everyone or `raise` for
+    one tenant. Filter with ?status=, ?period=YYYY-MM, ?tenant=<id>, ?property=<id>.
     """
-    queryset = Invoice.objects.select_related('tenant', 'unit', 'unit__property').all().order_by('-id')
     serializer_class = InvoiceDetailSerializer
-    permission_classes = [AllowAny]
+    permission_classes = [RolePermission]
+    read_roles = STAFF
+    write_roles = FINANCE
     filter_backends = [filters.SearchFilter]
-    search_fields = [
-        'invoice_number', 
-        'tenant__name', 
-        'tenant__tenant_id', 
-        'unit__unit_name'
-    ]
+    search_fields = ['invoice_number', 'tenant__name', 'tenant__tenant_id', 'unit__unit_name']
+
+    def get_queryset(self):
+        queryset = (
+            Invoice.objects.select_related('tenant', 'unit__property')
+            .prefetch_related('items', 'settlements__transaction')
+            .order_by('-billing_period', '-created_at')
+        )
+        params = self.request.query_params
+        if params.get('status'):
+            queryset = queryset.filter(status=params['status'])
+        if params.get('period'):
+            queryset = queryset.filter(billing_period=first_of_month(parse_period(params['period'])))
+        if params.get('tenant'):
+            queryset = queryset.filter(tenant_id=params['tenant'])
+        if params.get('property'):
+            queryset = queryset.filter(unit__property_id=params['property'])
+        return queryset
 
     @action(detail=False, methods=['post'], url_path='generate-monthly')
     def generate_monthly(self, request):
-        """
-        Triggers the management command to generate monthly invoices for active leases.
-        """
-        try:
-            call_command('generate_monthly_invoices')
-            return Response(
-                {'detail': 'Monthly invoices generated successfully.'}, 
-                status=status.HTTP_200_OK
+        """Bills every active lease for `period` (default: this month). Running it twice creates nothing new."""
+        period = parse_period(request.data.get('period')) if request.data.get('period') else datetime.today().date()
+        result = generate_invoices(period)
+        mark_overdue()
+        return Response({'period': f'{first_of_month(period):%Y-%m}', 'created': len(result.created), 'skipped': result.skipped})
+
+    @action(detail=False, methods=['post'], url_path='raise')
+    def raise_invoice(self, request):
+        """Bills one tenant for a period. Body: {"tenant": <id>, "period": "YYYY-MM"}."""
+        tenant = Tenant.objects.filter(pk=request.data.get('tenant'), status='active').first()
+        if tenant is None:
+            raise serializers.ValidationError({'tenant': 'Choose a current tenant.'})
+        period = parse_period(request.data.get('period'))
+        result = generate_invoices(period, tenant=tenant)
+        if not result.created:
+            raise serializers.ValidationError(
+                {'detail': 'Nothing was raised: the tenant already has an invoice for that month, or has no active lease.'}
             )
-        except Exception as e:
-            return Response(
-                {'error': f'Failed to generate invoices: {str(e)}'}, 
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )# billing/views.py
-
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework.permissions import AllowAny
-from rest_framework.decorators import permission_classes, authentication_classes
-from rest_framework import status
-
-class DashboardMetricsView(APIView):
-    authentication_classes = ()  # Must be an empty tuple/list
-    permission_classes = (AllowAny,)
-
-    def get(self, request):
-        data = {
-            "properties": ["Block A", "Block B", "Block C", "Block D"],
-            "total_units": [40, 25, 30, 15],
-            "occupied_units": [35, 20, 28, 10]
-        }
-        return Response(data, status=status.HTTP_200_OK)
-
-
-class PaymentSummariesView(APIView):
-    authentication_classes = ()  # Must be an empty tuple/list
-    permission_classes = (AllowAny,)
-
-    def get(self, request):
-        data = [
-            {"name": "Rent Collection", "collected": 450000, "total": 500000, "pct": 90},
-            {"name": "Water Collection", "collected": 18000, "total": 20000, "pct": 90},
-            {"name": "Garbage Collection", "collected": 5000, "total": 10000, "pct": 50}
-        ]
-        return Response(data, status=status.HTTP_200_OK)
+        return Response(self.get_serializer(result.created[0]).data, status=status.HTTP_201_CREATED)

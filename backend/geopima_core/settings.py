@@ -23,6 +23,17 @@ DEBUG = os.environ.get('DJANGO_DEBUG', 'False') == 'True'
 
 ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 
+# Behind the host's https proxy: trust its forwarded-proto header, and in production force https and secure cookies.
+CSRF_TRUSTED_ORIGINS = [o for o in os.environ.get('CSRF_TRUSTED_ORIGINS', '').split(',') if o]
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+if not DEBUG:
+    SECURE_SSL_REDIRECT = os.environ.get('DJANGO_SSL_REDIRECT', 'True') == 'True'
+    # Safaricom and health checks may call over the proxy; the redirect must not break them.
+    SECURE_REDIRECT_EXEMPT = [r'^healthz/?$']
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = int(os.environ.get('DJANGO_HSTS_SECONDS', '0'))
+
 
 # Application definition
 
@@ -47,10 +58,13 @@ INSTALLED_APPS = [
     'properties',
     'billing',
     'mpesa',
+    'communication',
+    'portal',
 ]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',  # serves the admin's static files in production
     'corsheaders.middleware.CorsMiddleware',  # High priority for pre-flight requests
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -84,16 +98,21 @@ WSGI_APPLICATION = 'geopima_core.wsgi.application'
 
 
 # Database
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.environ.get('DB_NAME', 'geopima_db'),
-        'USER': os.environ.get('DB_USER', 'postgres'),
-        'PASSWORD': os.environ['DB_PASSWORD'],
-        'HOST': os.environ.get('DB_HOST', 'localhost'),
-        'PORT': os.environ.get('DB_PORT', '5432'),
+if os.environ.get('DB_ENGINE', 'postgres') == 'sqlite':
+    # Lightweight option for local checks and tests; production uses Postgres.
+    DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': BASE_DIR / 'local.sqlite3'}}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.environ.get('DB_NAME', 'geopima_db'),
+            'USER': os.environ.get('DB_USER', 'postgres'),
+            'PASSWORD': os.environ['DB_PASSWORD'],
+            'HOST': os.environ.get('DB_HOST', 'localhost'),
+            'PORT': os.environ.get('DB_PORT', '5432'),
+            'OPTIONS': {'sslmode': os.environ.get('DB_SSLMODE', 'prefer')},
+        }
     }
-}
 
 
 # Password validation
@@ -126,6 +145,10 @@ USE_TZ = True
 # Static and Media files (CSS, JavaScript, Uploaded Images/Documents)
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
+STORAGES = {
+    'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+    'staticfiles': {'BACKEND': 'whitenoise.storage.CompressedStaticFilesStorage'},
+}
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
@@ -147,12 +170,37 @@ REST_FRAMEWORK = {
 
 # Simple JWT Configuration
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(days=1),
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=int(os.environ.get('JWT_ACCESS_MINUTES', '60'))),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
+
+
+# M-Pesa C2B callbacks are served at /api/v1/mpesa/c2b/<secret>/confirmation/ (and /validation/). Use a long random
+# value; with none set the callbacks are closed outside DEBUG.
+MPESA_CALLBACK_SECRET = os.environ.get('MPESA_CALLBACK_SECRET', '')
+# Shown to tenants as the business number to pay to.
+MPESA_PAYBILL = os.environ.get('MPESA_PAYBILL', '')
+# Daraja (Safaricom) API access. MPESA_ENV is 'sandbox' or 'production'. MPESA_PUBLIC_URL is this server's public https
+# address (no trailing slash); Safaricom calls back there. MPESA_BASE_URL overrides Safaricom's address (for tests).
+MPESA_ENV = os.environ.get('MPESA_ENV', 'sandbox')
+MPESA_CONSUMER_KEY = os.environ.get('MPESA_CONSUMER_KEY', '')
+MPESA_CONSUMER_SECRET = os.environ.get('MPESA_CONSUMER_SECRET', '')
+MPESA_PASSKEY = os.environ.get('MPESA_PASSKEY', '')
+MPESA_PUBLIC_URL = os.environ.get('MPESA_PUBLIC_URL', '')
+MPESA_BASE_URL = os.environ.get('MPESA_BASE_URL', '')
+
+
+# Text messages. 'console' only logs them (test mode); 'africastalking' really sends. AT_USERNAME 'sandbox' uses their
+# sandbox. AT_SENDER_ID is the registered sender name, if the agency has one.
+SMS_PROVIDER = os.environ.get('SMS_PROVIDER', 'console')
+# Send automatic receipts from a background thread so callbacks answer fast. Tests turn this off.
+SMS_BACKGROUND = os.environ.get('SMS_BACKGROUND', 'True') == 'True'
+AT_USERNAME = os.environ.get('AT_USERNAME', 'sandbox')
+AT_API_KEY = os.environ.get('AT_API_KEY', '')
+AT_SENDER_ID = os.environ.get('AT_SENDER_ID', '')
 
 
 # CORS Configuration

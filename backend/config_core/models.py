@@ -7,7 +7,7 @@ class AgencyProfile(models.Model):
         ('manual', 'Manual transition'),
     ]
 
-    company_name = models.CharField(max_length=255, default="Pemwa Agency")
+    company_name = models.CharField(max_length=255, default="GeoPima")
     short_name = models.CharField(max_length=50, blank=True, null=True)
     motto_slogan = models.CharField(max_length=255, default='"Your Comfort Our Concern"')
     contact = models.CharField(max_length=20)
@@ -58,6 +58,8 @@ class SMSTemplate(models.Model):
 
     category = models.CharField(max_length=20, choices=CATEGORY_CHOICES, unique=True)
     template_text = models.TextField()
+    # Only meaningful for PAYMENT_NOTIF: whether the receipt text is sent automatically when a payment is recorded.
+    enabled = models.BooleanField(default=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):

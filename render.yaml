@@ -1,0 +1,44 @@
+services:
+  - type: web
+    name: geopima-api
+    runtime: python
+    rootDir: backend
+    buildCommand: ./build.sh
+    startCommand: gunicorn geopima_core.wsgi:application --workers 2 --timeout 60
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: DJANGO_SECRET_KEY
+        generateValue: true
+      - key: MPESA_CALLBACK_SECRET
+        generateValue: true
+      - key: DJANGO_ALLOWED_HOSTS
+        value: geopima-api.onrender.com
+      - key: CSRF_TRUSTED_ORIGINS
+        value: https://geopima-api.onrender.com
+      - key: MPESA_PUBLIC_URL
+        value: https://geopima-api.onrender.com
+      - key: DB_SSLMODE
+        value: require
+      # Fill these in the Render dashboard (never commit them):
+      - key: DB_NAME
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_HOST
+        sync: false
+      - key: MPESA_ENV
+        value: sandbox
+      - key: MPESA_PAYBILL
+        sync: false
+      - key: MPESA_CONSUMER_KEY
+        sync: false
+      - key: MPESA_CONSUMER_SECRET
+        sync: false
+      - key: MPESA_PASSKEY
+        sync: false
+      - key: SMS_PROVIDER
+        value: console

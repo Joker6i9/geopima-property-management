@@ -14,7 +14,7 @@ Property management system for rental agencies: landlords, properties, units, te
 cd backend
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env      # fill in secrets and DB password
+cp .env.example .env      # fill in secret key and Neon DB details (DB_SSLMODE=require)
 python manage.py migrate
 python manage.py runserver
 ```

@@ -1,6 +1,8 @@
+import calendar
 import uuid
+from datetime import date
 from decimal import Decimal
-from django.db import models
+from django.db import models, transaction
 
 
 class Agency(models.Model):
@@ -47,6 +49,24 @@ class Deposit(models.Model):
         return f"{self.deposit_code} - {self.tenant}"
 
 
+class InvoiceSequence(models.Model):
+    """One row that hands out invoice numbers. Locked while incrementing so two requests never get the same number."""
+    name = models.CharField(max_length=20, primary_key=True, default='invoice')
+    last_value = models.PositiveBigIntegerField(default=0)
+
+    @classmethod
+    def next_number(cls) -> str:
+        with transaction.atomic():
+            seq, created = cls.objects.select_for_update().get_or_create(name='invoice')
+            if created:
+                # Continue after any numbers issued before this table existed.
+                existing = Invoice.objects.filter(invoice_number__startswith='INV').values_list('invoice_number', flat=True)
+                seq.last_value = max((int(n[3:]) for n in existing if n[3:].isdigit()), default=0)
+            seq.last_value += 1
+            seq.save()
+            return f"INV{seq.last_value:06d}"
+
+
 class Invoice(models.Model):
     STATUS_CHOICES = [
         ('unpaid', 'Unpaid'),
@@ -78,7 +98,8 @@ class Invoice(models.Model):
 
     @property
     def subtotal(self) -> Decimal:
-        return sum(item.amount for item in self.items.all())
+        # Iterating .all() uses prefetched rows when the caller did prefetch_related, so lists stay one query.
+        return sum((item.amount for item in self.items.all()), Decimal('0.00'))
 
     @property
     def net_total(self) -> Decimal:
@@ -86,17 +107,38 @@ class Invoice(models.Model):
 
     @property
     def rent_paid(self) -> Decimal:
-        """Sum of all allocated M-Pesa payments for this invoice."""
-        return sum(payment.amount_allocated for payment in self.allocations.all())
+        """Sum of everything settled against this invoice."""
+        return sum((s.amount_applied for s in self.settlements.all()), Decimal('0.00'))
 
     @property
     def balance(self) -> Decimal:
         return self.net_total - self.rent_paid
 
+    def refresh_status(self, today: date | None = None, save: bool = True) -> str:
+        """Sets paid / partially_paid / overdue / unpaid from the current balance and due date."""
+        today = today or date.today()
+        paid, total = self.rent_paid, self.net_total
+        if total > 0 and paid >= total:
+            self.status = 'paid'
+        elif paid > 0:
+            self.status = 'partially_paid'
+        elif self.due_date < today:
+            self.status = 'overdue'
+        else:
+            self.status = 'unpaid'
+        if save:
+            self.save(update_fields=['status'])
+        return self.status
+
+    @staticmethod
+    def due_date_for(period: date, due_day: int) -> date:
+        """The tenant's rent due day inside the billing month (clamped, so day 31 works in February)."""
+        last = calendar.monthrange(period.year, period.month)[1]
+        return period.replace(day=min(max(due_day, 1), last))
+
     def save(self, *args, **kwargs):
         if not self.invoice_number:
-            count = Invoice.objects.filter(billing_period=self.billing_period).count() + 1
-            self.invoice_number = f"INV{count:06d}"
+            self.invoice_number = InvoiceSequence.next_number()
         super().save(*args, **kwargs)
 
 

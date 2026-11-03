@@ -1,4 +1,4 @@
-import uuid
+from django.conf import settings
 from django.db import models
 from django.utils import timezone
 
@@ -21,8 +21,12 @@ class Landlord(models.Model):
     bank_name = models.CharField(max_length=100, blank=True, null=True)
     account_name = models.CharField(max_length=100, blank=True, null=True)
     account_number = models.CharField(max_length=50, blank=True, null=True)
-    registration_date = models.DateField(default=timezone.now)
+    registration_date = models.DateField(default=timezone.localdate)
     is_active = models.BooleanField(default=True)
+    # Lets a landlord sign in to the landlord portal.
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='landlord_profile'
+    )
 
     def __str__(self):
         return f"{self.landlord_id} - {self.name}"
@@ -83,45 +87,3 @@ class Unit(models.Model):
 
     def __str__(self):
         return f"{self.property.name} - Unit {self.unit_name}"
-
-
-class MpesaTransaction(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    mpesa_receipt_number = models.CharField(max_length=50, unique=True)
-    transaction_type = models.CharField(max_length=20, default='c2b')
-    amount = models.DecimalField(max_digits=12, decimal_places=2)
-    phone_number = models.CharField(max_length=20)
-    account_reference = models.CharField(max_length=50, blank=True, null=True)
-    transaction_date = models.DateTimeField(default=timezone.now)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    def __str__(self):
-        return f"{self.mpesa_receipt_number} - {self.amount}"
-
-
-class PaymentAllocation(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    invoice = models.ForeignKey(
-        'billing.Invoice', 
-        on_delete=models.CASCADE, 
-        related_name='allocations',
-        null=True, blank=True
-    )
-    mpesa_transaction = models.ForeignKey(
-        MpesaTransaction, 
-        on_delete=models.CASCADE, 
-        related_name='allocations'
-    )
-    amount_allocated = models.DecimalField(max_digits=12, decimal_places=2)
-    allocated_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        ordering = ['-allocated_at']
-
-    def __str__(self):
-        return f"Allocation: {self.amount_allocated}"
-
-
-PropertyUnit = Unit
-
-__all__ = ['Landlord', 'Property', 'Unit', 'PropertyUnit', 'MpesaTransaction', 'PaymentAllocation']

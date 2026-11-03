@@ -28,6 +28,7 @@ router.register(r'agreement-templates', AgreementTemplateViewSet, basename='agre
 urlpatterns = [
     path('token/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    path('me/', CurrentUserView.as_view(), name='me'),
     path('auth/me/', CurrentUserView.as_view(), name='current-user'),
     path('dashboard/metrics/', DashboardMetricsView.as_view(), name='dashboard-metrics'),
     path('dashboard/payment-summaries/', PaymentSummariesView.as_view(), name='payment-summaries'),

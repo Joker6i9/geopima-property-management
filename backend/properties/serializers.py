@@ -126,7 +126,9 @@ class PropertySerializer(serializers.ModelSerializer):
 
         raw_prop_id = data.get('property_id') or data.get('propertyId') or data.get('pro_id')
         if not raw_prop_id or not str(raw_prop_id).strip():
-            data['property_id'] = self._generate_property_id()
+            # Only new properties get a code; editing one must never change it.
+            if self.instance is None:
+                data['property_id'] = self._generate_property_id()
         else:
             data['property_id'] = str(raw_prop_id).strip()
 
@@ -220,6 +222,7 @@ class PropertySerializer(serializers.ModelSerializer):
 
 class UnitSerializer(serializers.ModelSerializer):
     property_name = serializers.ReadOnlyField(source='property.name', default='')
+    property_pk = serializers.ReadOnlyField(source='property_id')
     
     # Expect and process string property_id values as primary lookup reference
     property = serializers.SlugRelatedField(
@@ -252,6 +255,7 @@ class UnitSerializer(serializers.ModelSerializer):
             'unitName', 
             'property', 
             'property_name', 
+            'property_pk',
             'landlord_name', 
             'rent_amount',
             'deposit',

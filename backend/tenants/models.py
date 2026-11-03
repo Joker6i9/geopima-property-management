@@ -36,8 +36,11 @@ class Tenant(models.Model):
     name = models.CharField(max_length=255)
     phone_number = models.CharField(max_length=20)
     email = models.EmailField(blank=True, null=True)
+    id_number = models.CharField(max_length=30, blank=True)
+    # Next of kin or a second number to reach them on.
+    secondary_contact = models.CharField(max_length=20, blank=True)
     unit = models.ForeignKey(Unit, on_delete=models.SET_NULL, null=True, blank=True, related_name='tenants')
-    entry_date = models.DateField(default=timezone.now)
+    entry_date = models.DateField(default=timezone.localdate)
     due_date = models.PositiveIntegerField(default=5)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
 
