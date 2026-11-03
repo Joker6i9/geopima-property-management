@@ -12,6 +12,7 @@ class TenantSerializer(serializers.ModelSerializer):
     property_name = serializers.ReadOnlyField(source='unit.property.name', default=None)
     unit_name = serializers.ReadOnlyField(source='unit.unit_name', default=None)
     landlord_name = serializers.SerializerMethodField()
+    has_login = serializers.SerializerMethodField()
 
     class Meta:
         model = Tenant
@@ -19,6 +20,7 @@ class TenantSerializer(serializers.ModelSerializer):
             'id',
             'tenant_id',
             'tenantId',
+            'has_login',
             'name',
             'email',
             'phone_number',
@@ -53,6 +55,9 @@ class TenantSerializer(serializers.ModelSerializer):
 
     def validate_secondary_contact(self, value):
         return normalize_phone_number(value) if value else ''
+
+    def get_has_login(self, obj):
+        return obj.user_id is not None
 
     def get_landlord_name(self, obj):
         try:

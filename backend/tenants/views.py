@@ -2,6 +2,7 @@ from rest_framework import filters, serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
+from config_core.accounts import issue_login
 from config_core.permissions import PORTFOLIO, STAFF, RolePermission
 from . import services
 from .models import LeaseAgreement, Tenant
@@ -63,6 +64,14 @@ class TenantViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def reactivate(self, request, pk=None):
         return self._set_status(self.get_object(), 'active')
+
+    @action(detail=True, methods=['post'])
+    def login(self, request, pk=None):
+        """Create the tenant's portal login, or reset its password. The password is returned once."""
+        tenant = self.get_object()
+        if tenant.status == 'vacated':
+            raise serializers.ValidationError({'detail': 'This tenant has moved out, so they cannot be given a login.'})
+        return Response(issue_login(tenant, tenant.phone_number, tenant.email))
 
     def _set_status(self, tenant, new_status):
         if tenant.status == 'vacated':

@@ -4,9 +4,14 @@ from .models import Landlord, Property, Unit
 
 
 class LandlordSerializer(serializers.ModelSerializer):
+    has_login = serializers.SerializerMethodField()
+
     class Meta:
         model = Landlord
         fields = '__all__'
+
+    def get_has_login(self, obj):
+        return obj.user_id is not None
 
     def to_internal_value(self, data):
         data = data.copy() if hasattr(data, 'copy') else dict(data)

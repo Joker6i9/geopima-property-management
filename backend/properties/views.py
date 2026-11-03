@@ -2,6 +2,7 @@ from rest_framework import filters, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
+from config_core.accounts import issue_login
 from config_core.permissions import PORTFOLIO, STAFF, RolePermission
 from tenants.serializers import TenantSerializer
 from properties.models import Landlord, Property, Unit
@@ -23,6 +24,12 @@ class LandlordViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return Landlord.objects.all().order_by('-id')
+
+    @action(detail=True, methods=['post'])
+    def login(self, request, pk=None):
+        """Create the landlord's portal login, or reset its password. The password is returned once."""
+        landlord = self.get_object()
+        return Response(issue_login(landlord, landlord.landlord_id.lower(), getattr(landlord, 'email', None)))
 
 
 class PropertyViewSet(viewsets.ModelViewSet):

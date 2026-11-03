@@ -20,6 +20,8 @@ urlpatterns = [
     }), name='landlord-detail'),
 
     # Units endpoints (/api/v1/properties/units/)
+    path('landlords/<int:pk>/login/', LandlordViewSet.as_view({'post': 'login'}), name='landlord-login'),
+
     path('units/', UnitViewSet.as_view({
         'get': 'list',
         'post': 'create'
