@@ -1,4 +1,4 @@
-from rest_framework import viewsets, mixins, status
+from rest_framework import viewsets, mixins, serializers, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.decorators import action
@@ -132,6 +132,20 @@ class UserAccountViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return User.objects.all()
 
+    def perform_update(self, serializer):
+        # Nobody can lock themselves out or demote themselves by accident.
+        if serializer.instance == self.request.user:
+            data = serializer.validated_data
+            if data.get('is_active') is False:
+                raise serializers.ValidationError({'detail': 'You cannot deactivate your own account.'})
+            if 'role' in data and data['role'] not in role_names(self.request.user) and not self.request.user.is_superuser:
+                raise serializers.ValidationError({'detail': 'You cannot change your own role.'})
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        # Accounts are kept (their history points at them); deactivating is the way to remove access.
+        raise serializers.ValidationError({'detail': 'Accounts cannot be deleted. Deactivate the account instead.'})
+
 
 class PaymentBankViewSet(viewsets.ModelViewSet):
     queryset = PaymentBank.objects.all()
@@ -162,10 +176,10 @@ class SMSTemplateViewSet(viewsets.ModelViewSet):
             category = item.get('category')
             text = item.get('template_text')
             if category and text:
-                obj, _ = SMSTemplate.objects.update_or_create(
-                    category=category,
-                    defaults={'template_text': text}
-                )
+                defaults = {'template_text': text}
+                if isinstance(item.get('enabled'), bool):
+                    defaults['enabled'] = item['enabled']
+                obj, _ = SMSTemplate.objects.update_or_create(category=category, defaults=defaults)
                 updated_objects.append(obj)
 
         serializer = self.get_serializer(updated_objects, many=True)

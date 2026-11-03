@@ -152,3 +152,37 @@ class InvoiceApiTests(TestCase):
         invoice = Invoice.objects.get()
         self.assertEqual(self.accountant.delete(f'/api/v1/billing/invoices/{invoice.pk}/').status_code, 405)
         self.assertEqual(self.accountant.patch(f'/api/v1/billing/invoices/{invoice.pk}/', {}, format='json').status_code, 405)
+
+
+class TenantEditTests(TestCase):
+    def setUp(self):
+        from config_core.testing import client_for, make_tenant, make_unit, make_user
+        self.client = client_for(make_user('Secretary'))
+        self.tenant = make_tenant(make_unit(name='B1'), phone='0712345678')
+        self.other = make_tenant(make_unit(name='B2'), name='Other Person', phone='0722000000')
+        self.url = f'/api/v1/tenants/tenants/{self.tenant.pk}/'
+
+    def test_details_can_be_edited_and_phone_is_normalised(self):
+        res = self.client.patch(self.url, {'phone_number': '0733 111 222', 'id_number': '12345678', 'secondary_contact': '0700111222', 'due_date': 10}, format='json')
+        self.assertEqual(res.status_code, 200, res.data)
+        self.tenant.refresh_from_db()
+        self.assertEqual((self.tenant.phone_number, self.tenant.id_number, self.tenant.secondary_contact, self.tenant.due_date),
+                         ('254733111222', '12345678', '254700111222', 10))
+
+    def test_phone_must_be_valid_and_not_used_by_another_current_tenant(self):
+        self.assertEqual(self.client.patch(self.url, {'phone_number': '123'}, format='json').status_code, 400)
+        self.assertEqual(self.client.patch(self.url, {'phone_number': '0722000000'}, format='json').status_code, 400)
+        self.assertEqual(self.client.patch(self.url, {'phone_number': '0712345678'}, format='json').status_code, 200)
+
+    def test_due_day_is_limited_to_1_28(self):
+        self.assertEqual(self.client.patch(self.url, {'due_date': 31}, format='json').status_code, 400)
+
+    def test_move_in_keeps_id_number_and_second_contact(self):
+        from config_core.testing import make_unit
+        unit = make_unit(name='B3')
+        res = self.client.post('/api/v1/tenants/tenants/move-in/', {
+            'unit': unit.pk, 'name': 'New Tenant', 'phone_number': '0744555666', 'start_date': '2026-11-01',
+            'id_number': '99887766', 'secondary_contact': '0711222333',
+        }, format='json')
+        self.assertEqual(res.status_code, 201, res.data)
+        self.assertEqual((res.data['id_number'], res.data['secondary_contact']), ('99887766', '254711222333'))

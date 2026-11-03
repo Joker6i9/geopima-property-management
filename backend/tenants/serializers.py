@@ -2,6 +2,7 @@ from rest_framework import serializers
 
 from properties.models import Unit
 from .models import Tenant, LeaseAgreement
+from .utils import normalize_phone_number
 
 
 class TenantSerializer(serializers.ModelSerializer):
@@ -22,6 +23,8 @@ class TenantSerializer(serializers.ModelSerializer):
             'email',
             'phone_number',
             'contact',
+            'id_number',
+            'secondary_contact',
             'unit',
             'property_name',
             'unit_name',
@@ -31,6 +34,25 @@ class TenantSerializer(serializers.ModelSerializer):
             'status',
         ]
         read_only_fields = ['id']
+
+    def validate_phone_number(self, value):
+        phone = normalize_phone_number(value)
+        if len(phone) != 12:
+            raise serializers.ValidationError('Enter a valid Kenyan phone number, e.g. 0712 345 678.')
+        clash = Tenant.objects.exclude(status='vacated').filter(phone_number=phone)
+        if self.instance is not None:
+            clash = clash.exclude(pk=self.instance.pk)
+        if clash.exists():
+            raise serializers.ValidationError('A current tenant already uses that phone number.')
+        return phone
+
+    def validate_due_date(self, value):
+        if not 1 <= value <= 28:
+            raise serializers.ValidationError('Rent due day must be between 1 and 28.')
+        return value
+
+    def validate_secondary_contact(self, value):
+        return normalize_phone_number(value) if value else ''
 
     def get_landlord_name(self, obj):
         try:
@@ -77,3 +99,5 @@ class MoveInSerializer(serializers.Serializer):
     start_date = serializers.DateField()
     end_date = serializers.DateField(required=False, allow_null=True)
     due_date = serializers.IntegerField(required=False, default=5, min_value=1, max_value=28)
+    id_number = serializers.CharField(max_length=30, required=False, allow_blank=True, default='')
+    secondary_contact = serializers.CharField(max_length=20, required=False, allow_blank=True, default='')

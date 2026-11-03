@@ -15,7 +15,8 @@ class TenancyError(ValueError):
 
 @transaction.atomic
 def move_in(*, unit: Unit, name: str, phone_number: str, email: str | None, start_date: date,
-            end_date: date | None, due_date: int = 5, today: date | None = None) -> Tenant:
+            end_date: date | None, due_date: int = 5, id_number: str = '', secondary_contact: str = '',
+            today: date | None = None) -> Tenant:
     """
     Puts a new tenant in a vacant unit: creates the tenant, an active lease at the unit's rent, a held deposit,
     marks the unit occupied, and bills the first month (including the deposit).
@@ -36,7 +37,8 @@ def move_in(*, unit: Unit, name: str, phone_number: str, email: str | None, star
 
     tenant = Tenant.objects.create(
         name=name, phone_number=phone, email=email or None, unit=unit,
-        entry_date=start_date, due_date=due_date, status='active',
+        entry_date=start_date, due_date=due_date, status='active', id_number=id_number.strip(),
+        secondary_contact=normalize_phone_number(secondary_contact),
     )
     LeaseAgreement.objects.create(
         tenant=tenant, unit=unit, start_date=start_date, end_date=end_date,

@@ -58,6 +58,8 @@ class SMSTemplate(models.Model):
 
     category = models.CharField(max_length=20, choices=CATEGORY_CHOICES, unique=True)
     template_text = models.TextField()
+    # Only meaningful for PAYMENT_NOTIF: whether the receipt text is sent automatically when a payment is recorded.
+    enabled = models.BooleanField(default=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):

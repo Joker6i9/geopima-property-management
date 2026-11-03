@@ -1,12 +1,17 @@
 import logging
+from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 
+from django.conf import settings
 from django.db import transaction
+from django.utils import timezone
+from rest_framework import serializers as drf_serializers
 
 from billing.models import Invoice
 from tenants.models import Tenant
 from tenants.utils import normalize_phone_number
-from .models import MpesaTransaction, PaymentSettlement
+from . import daraja
+from .models import MpesaTransaction, PaymentSettlement, StkRequest
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +132,9 @@ class MpesaSettlementEngine:
 
         tx.is_settled = caller_tx.is_settled = True
         tx.save(update_fields=['is_settled'])
+        # After the payment is committed, tell the tenant. Only the first settlement of a payment gets here.
+        from communication.services import notify_payment_received
+        transaction.on_commit(lambda: notify_payment_received(tx.pk, tenant.pk))
         return True
 
     @classmethod
@@ -159,3 +167,111 @@ class MpesaSettlementEngine:
             (s.amount_applied for s in PaymentSettlement.objects.filter(tenant=tenant, invoice__isnull=True)),
             Decimal('0.00'),
         )
+
+
+# ---------------------------------------------------------------- STK push (PIN prompt on the tenant's phone)
+
+STK_MIN, STK_MAX = 1, 150_000  # KES per prompt
+STK_WAIT = timedelta(seconds=90)      # while a prompt is waiting, do not send another to the same tenant
+STK_GIVE_UP = timedelta(minutes=5)    # after this with no word from Safaricom the prompt is treated as lapsed
+
+# Safaricom result codes worth telling the customer about.
+CANCELLED_CODES = {1032}
+TIMEOUT_CODES = {1037}
+# A status check answering 4999 means Safaricom is still waiting for the customer: not a result yet.
+IN_PROGRESS_CODES = {4999}
+
+
+def start_stk(*, tenant: Tenant, phone: str, amount: int, user=None) -> StkRequest:
+    phone = normalize_phone_number(phone)
+    if len(phone) != 12 or not phone.startswith('254'):
+        raise drf_serializers.ValidationError({'phone': 'Enter a valid Safaricom number, e.g. 0712 345 678.'})
+    if not STK_MIN <= amount <= STK_MAX:
+        raise drf_serializers.ValidationError({'amount': f'Enter an amount from {STK_MIN} to {STK_MAX:,} KES.'})
+    recent = StkRequest.objects.filter(tenant=tenant, status='pending', created_at__gte=timezone.now() - STK_WAIT).exists()
+    if recent:
+        raise drf_serializers.ValidationError({'detail': 'A payment request was just sent to the phone. Enter the PIN there, or wait a minute to try again.'})
+
+    reference = (tenant.unit.unit_name if tenant.unit else tenant.tenant_id)[:12]
+    try:
+        reply = daraja.stk_push(phone=phone, amount=amount, account_reference=reference)
+    except daraja.DarajaError as e:
+        raise drf_serializers.ValidationError({'detail': str(e)})
+    return StkRequest.objects.create(
+        tenant=tenant, phone=phone, amount=amount, account_reference=reference,
+        merchant_request_id=reply.get('MerchantRequestID', ''), checkout_request_id=reply['CheckoutRequestID'],
+        requested_by=user if getattr(user, 'is_authenticated', False) else None,
+    )
+
+
+def apply_stk_callback(payload: dict) -> StkRequest | None:
+    """
+    Safaricom's answer to a PIN prompt. Matched by CheckoutRequestID, so only prompts we sent can ever be settled, and
+    the tenant is the one we asked, not anything the callback says. Safe to receive twice.
+    """
+    try:
+        cb = payload['Body']['stkCallback']
+        checkout_id = str(cb['CheckoutRequestID'])
+        code = int(cb.get('ResultCode', -1))
+    except (KeyError, TypeError, ValueError):
+        raise InvalidPayload('Not an STK callback.')
+
+    with transaction.atomic():
+        stk = StkRequest.objects.select_for_update().select_related('tenant').filter(checkout_request_id=checkout_id).first()
+        # A paid prompt is final. Any other state can still be overtaken by a late success: the customer may enter the
+        # PIN after we gave up waiting, and that money must not be lost.
+        if stk is None or stk.status == 'success':
+            return stk
+        if code != 0:
+            if stk.status != 'pending':
+                return stk  # a late failure must not overwrite what we already recorded
+            stk.status = 'cancelled' if code in CANCELLED_CODES else 'timeout' if code in TIMEOUT_CODES else 'failed'
+            stk.result_desc = str(cb.get('ResultDesc', ''))[:255]
+            stk.save(update_fields=['status', 'result_desc', 'updated_at'])
+            return stk
+
+        items = {i.get('Name'): i.get('Value') for i in (cb.get('CallbackMetadata') or {}).get('Item', [])}
+        receipt = str(items.get('MpesaReceiptNumber') or '').strip()
+        try:
+            amount = Decimal(str(items.get('Amount')))
+        except (InvalidOperation, TypeError):
+            amount = Decimal(stk.amount)
+        if not receipt:
+            raise InvalidPayload('Successful STK callback without a receipt number.')
+
+        # The paybill's own C2B confirmation for the same payment may already have stored it; either order works.
+        tx, _ = MpesaTransaction.objects.get_or_create(
+            trans_id=receipt,
+            defaults={
+                'trans_time': str(items.get('TransactionDate', '')), 'trans_amount': amount,
+                'business_short_code': str(settings.MPESA_PAYBILL), 'bill_ref_number': stk.account_reference,
+                'msisdn': str(items.get('PhoneNumber', stk.phone)), 'raw_payload': payload,
+            },
+        )
+        stk.status, stk.receipt, stk.transaction, stk.result_desc = 'success', receipt, tx, str(cb.get('ResultDesc', ''))[:255]
+        stk.save(update_fields=['status', 'receipt', 'transaction', 'result_desc', 'updated_at'])
+        MpesaSettlementEngine.settle_transaction(tx, tenant=stk.tenant)
+        return stk
+
+
+def refresh_stk(stk: StkRequest) -> StkRequest:
+    """
+    Called when someone checks on a pending prompt. If the callback never came (server was down, URL not reachable)
+    this asks Safaricom directly, and lets the prompt lapse after a few minutes so nobody waits forever. A paid prompt
+    needs the callback for its receipt number, so it is never closed here; the paybill confirmation will cover it.
+    """
+    if stk.status != 'pending' or timezone.now() - stk.created_at < timedelta(seconds=20):
+        return stk
+    try:
+        answer = daraja.stk_query(stk.checkout_request_id)
+        code = int(answer.get('ResultCode', 0))
+    except (daraja.DarajaError, ValueError, TypeError):
+        code = 0  # still processing, or Safaricom is unreachable: keep waiting
+    if code not in IN_PROGRESS_CODES and code != 0:
+        stk.status = 'cancelled' if code in CANCELLED_CODES else 'timeout' if code in TIMEOUT_CODES else 'failed'
+        stk.result_desc = str(answer.get('ResultDesc', ''))[:255]
+        stk.save(update_fields=['status', 'result_desc', 'updated_at'])
+    elif timezone.now() - stk.created_at > STK_GIVE_UP:
+        stk.status, stk.result_desc = 'timeout', 'No answer from Safaricom.'
+        stk.save(update_fields=['status', 'result_desc', 'updated_at'])
+    return stk

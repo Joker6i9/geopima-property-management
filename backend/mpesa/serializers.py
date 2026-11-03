@@ -3,7 +3,7 @@ from datetime import datetime
 from rest_framework import serializers
 
 from tenants.models import Tenant
-from .models import MpesaTransaction
+from .models import MpesaTransaction, StkRequest
 
 
 class MpesaTransactionSerializer(serializers.ModelSerializer):
@@ -17,7 +17,7 @@ class MpesaTransactionSerializer(serializers.ModelSerializer):
         model = MpesaTransaction
         fields = [
             'id', 'trans_id', 'time', 'trans_amount', 'msisdn', 'bill_ref_number', 'first_name', 'last_name',
-            'status', 'tenant', 'allocations', 'unallocated',
+            'status', 'tenant', 'allocations', 'unallocated', 'channel', 'paid_to', 'note',
         ]
 
     def get_time(self, obj):
@@ -46,3 +46,42 @@ class MpesaTransactionSerializer(serializers.ModelSerializer):
 
 class AssignSerializer(serializers.Serializer):
     tenant = serializers.PrimaryKeyRelatedField(queryset=Tenant.objects.all())
+
+
+
+class RecordPaymentSerializer(serializers.Serializer):
+    """A payment staff received outside the paybill: cash, a bank transfer or a cheque."""
+    tenant = serializers.PrimaryKeyRelatedField(queryset=Tenant.objects.all())
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=1)
+    channel = serializers.ChoiceField(choices=[c for c in MpesaTransaction.CHANNEL_CHOICES if c[0] != 'mpesa'])
+    date = serializers.DateField()
+    reference = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    paid_to = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    note = serializers.CharField(max_length=255, required=False, allow_blank=True)
+
+    def validate_date(self, value):
+        from django.utils import timezone
+        if value > timezone.localdate():
+            raise serializers.ValidationError('The payment date cannot be in the future.')
+        return value
+
+    def validate(self, attrs):
+        # Cash has no slip number, so one is made up; bank and cheque payments must carry theirs.
+        if not attrs.get('reference'):
+            if attrs['channel'] != 'cash':
+                raise serializers.ValidationError({'reference': 'Enter the bank reference or cheque number.'})
+        elif MpesaTransaction.objects.filter(trans_id__iexact=attrs['reference']).exists():
+            raise serializers.ValidationError({'reference': 'A payment with this reference was already recorded.'})
+        return attrs
+
+
+class StkStartSerializer(serializers.Serializer):
+    tenant = serializers.PrimaryKeyRelatedField(queryset=Tenant.objects.all())
+    amount = serializers.IntegerField(min_value=1)
+    phone = serializers.CharField(max_length=20, required=False, allow_blank=True)
+
+
+class StkRequestSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StkRequest
+        fields = ['id', 'status', 'amount', 'phone', 'result_desc', 'receipt', 'created_at']

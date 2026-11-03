@@ -27,7 +27,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
 
 
 class UserAccountSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True)
+    password = serializers.CharField(write_only=True, min_length=8)
     full_name = serializers.CharField(write_only=True, required=False)
     phone = serializers.CharField(write_only=True, required=False, allow_blank=True)
     position = serializers.CharField(write_only=True, required=False, allow_blank=True)
@@ -86,6 +86,39 @@ class UserAccountSerializer(serializers.ModelSerializer):
 
         return user
 
+    def validate_role(self, value):
+        if not UserRole.objects.filter(name=value).exists():
+            raise serializers.ValidationError('Choose one of the existing roles.')
+        return value
+
+    def validate_password(self, value):
+        from django.contrib.auth.password_validation import validate_password
+        validate_password(value)
+        return value
+
+    def update(self, instance, validated_data):
+        """Staff edits: name, phone, email, active flag, one role, and a new password."""
+        role_name = validated_data.pop('role', None)
+        full_name = validated_data.pop('full_name', None)
+        phone = validated_data.pop('phone', None)
+        validated_data.pop('position', None)
+        password = validated_data.pop('password', None)
+        validated_data.pop('username', None)  # a username is permanent: it is how people sign in and how logs read
+
+        for field, value in validated_data.items():
+            setattr(instance, field, value)
+        if full_name is not None:
+            first, _, last = full_name.strip().partition(' ')
+            instance.first_name, instance.last_name = first, last
+        if phone is not None:
+            instance.phone = phone or None
+        if password:
+            instance.set_password(password)
+        instance.save()
+        if role_name:
+            instance.roles.set([UserRole.objects.get_or_create(name=role_name)[0]])
+        return instance
+
 
 class AgencyProfileSerializer(serializers.ModelSerializer):
     # Where tenants pay; set in the environment, shown here so the web app can print it on invoices.
@@ -115,7 +148,7 @@ class PaymentBankSerializer(serializers.ModelSerializer):
 class SMSTemplateSerializer(serializers.ModelSerializer):
     class Meta:
         model = SMSTemplate
-        fields = ['id', 'category', 'template_text', 'updated_at']
+        fields = ['id', 'category', 'template_text', 'enabled', 'updated_at']
 
 
 class AgreementTemplateSerializer(serializers.ModelSerializer):

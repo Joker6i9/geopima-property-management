@@ -41,6 +41,7 @@ class TenantViewSet(viewsets.ModelViewSet):
             tenant = services.move_in(
                 unit=data['unit'], name=data['name'], phone_number=data['phone_number'], email=data.get('email'),
                 start_date=data['start_date'], end_date=data.get('end_date'), due_date=data['due_date'],
+                id_number=data['id_number'], secondary_contact=data['secondary_contact'],
             )
         except services.TenancyError as exc:
             raise serializers.ValidationError({'detail': str(exc)})

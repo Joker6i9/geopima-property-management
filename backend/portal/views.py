@@ -263,3 +263,24 @@ class LandlordStatementsView(LandlordPortalView):
         rows = statement_rows(self.invoices(billing_period__gte=since), commission)
         landlord = self.landlord
         return respond({'landlord': {'id': landlord.id, 'code': landlord.landlord_id, 'name': landlord.name}, 'rows': rows})
+
+
+class TenantPayView(TenantPortalView):
+    """The tenant asks for an M-Pesa PIN prompt on their own phone: POST {"amount", "phone"?}."""
+
+    def post(self, request):
+        from mpesa.serializers import StkRequestSerializer
+        from mpesa.services import start_stk
+        amount = serializers.IntegerField(min_value=1).run_validation(request.data.get('amount'))
+        phone = str(request.data.get('phone') or self.tenant.phone_number)
+        stk = start_stk(tenant=self.tenant, phone=phone, amount=amount, user=request.user)
+        return Response(StkRequestSerializer(stk).data, status=201)
+
+
+class TenantPayStatusView(TenantPortalView):
+    def get(self, request, pk):
+        from mpesa.models import StkRequest
+        from mpesa.serializers import StkRequestSerializer
+        from mpesa.services import refresh_stk
+        stk = get_object_or_404(StkRequest, pk=pk, tenant=self.tenant)
+        return Response(StkRequestSerializer(refresh_stk(stk)).data)

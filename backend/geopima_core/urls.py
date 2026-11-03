@@ -1,9 +1,11 @@
 from django.contrib import admin
+from django.http import HttpResponse
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 
 urlpatterns = [
+    path('healthz', lambda request: HttpResponse('ok')),  # uptime/health checks
     path('admin/', admin.site.urls),
 
     # Application APIs. config_core serves token/, token/refresh/ and me/.
@@ -11,6 +13,8 @@ urlpatterns = [
     path('api/v1/properties/', include('properties.urls')),
     path('api/v1/billing/', include('billing.urls')),
     path('api/v1/mpesa/', include('mpesa.urls')),
+    path('api/v1/payments/', include('mpesa.callback_urls')),
+    path('api/v1/communication/', include('communication.urls')),
     path('api/v1/portal/', include('portal.urls')),
     path('api/v1/', include('config_core.urls')),
 ]

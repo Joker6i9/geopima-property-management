@@ -1,5 +1,6 @@
 from datetime import date
 
+from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
 from django.test import TestCase
 
@@ -122,6 +123,7 @@ class SeedRolesTests(TestCase):
 class UserAccountTests(TestCase):
     def test_creating_a_user_assigns_a_user_role_and_phone(self):
         admin = client_for(make_user('Admin'))
+        UserRole.objects.get_or_create(name='Accountant')
         response = admin.post('/api/v1/users/', {
             'username': 'newbie', 'email': 'n@example.com', 'password': 'a-long-pass-123',
             'full_name': 'New Bie', 'role': 'Accountant', 'phone': '0712345678',
@@ -151,3 +153,44 @@ class DashboardTests(TestCase):
         data = client_for(make_user('Accountant')).get('/api/v1/dashboard/payment-summaries/').json()
         self.assertEqual({d['name']: (d['collected'], d['total']) for d in data}, {'Rent': (0, 10000), 'Water': (0, 1000)})
         self.assertEqual(client_for(make_user('Secretary')).get('/api/v1/dashboard/payment-summaries/').status_code, 403)
+
+
+class StaffAccountTests(TestCase):
+    def setUp(self):
+        self.admin = make_user('Admin')
+        self.client = client_for(self.admin)
+        for name in ('Accountant', 'Secretary'):
+            UserRole.objects.get_or_create(name=name)
+
+    def create(self, **extra):
+        body = {'username': 'jane', 'email': 'jane@x.co', 'password': 'Sup3rSecret!', 'full_name': 'Jane Mwangi',
+                'phone': '0712000111', 'role': 'Accountant', **extra}
+        return self.client.post('/api/v1/users/', body, format='json')
+
+    def test_create_then_edit_role_name_and_active(self):
+        res = self.create()
+        self.assertEqual(res.status_code, 201, res.data)
+        pk = res.data['id']
+        res = self.client.patch(f'/api/v1/users/{pk}/', {'role': 'Secretary', 'full_name': 'Jane W Mwangi', 'is_active': False}, format='json')
+        self.assertEqual(res.status_code, 200, res.data)
+        user = get_user_model().objects.get(pk=pk)
+        self.assertEqual(list(user.roles.values_list('name', flat=True)), ['Secretary'])
+        self.assertEqual((user.first_name, user.last_name, user.is_active), ('Jane', 'W Mwangi', False))
+
+    def test_unknown_role_and_weak_password_are_rejected(self):
+        self.assertEqual(self.create(role='Wizard').status_code, 400)
+        self.assertEqual(self.create(password='1234').status_code, 400)
+
+    def test_password_can_be_reset_without_resending_other_fields(self):
+        pk = self.create().data['id']
+        self.assertEqual(self.client.patch(f'/api/v1/users/{pk}/', {'password': 'An0therSecret!'}, format='json').status_code, 200)
+        self.assertTrue(get_user_model().objects.get(pk=pk).check_password('An0therSecret!'))
+
+    def test_you_cannot_deactivate_or_demote_yourself_and_accounts_are_not_deleted(self):
+        url = f'/api/v1/users/{self.admin.pk}/'
+        self.assertEqual(self.client.patch(url, {'is_active': False}, format='json').status_code, 400)
+        self.assertEqual(self.client.patch(url, {'role': 'Accountant'}, format='json').status_code, 400)
+        self.assertEqual(self.client.delete(url).status_code, 400)
+
+    def test_only_admins_manage_staff(self):
+        self.assertEqual(client_for(make_user('Accountant')).get('/api/v1/users/').status_code, 403)

@@ -39,10 +39,14 @@ class PaymentDetailSerializer(serializers.Serializer):
     amount = serializers.DecimalField(source='amount_applied', max_digits=12, decimal_places=2)
 
     def get_bank(self, obj):
-        return f"Lipa Na M-pesa REF#: {obj.transaction.trans_id}"
+        tx = obj.transaction
+        if tx.channel == 'mpesa':
+            return f"Lipa Na M-pesa REF#: {tx.trans_id}"
+        label = f"{tx.get_channel_display()} REF#: {tx.trans_id}"
+        return f"{label} ({tx.paid_to})" if tx.paid_to else label
 
     def get_type(self, obj):
-        return 'C2B'
+        return 'C2B' if obj.transaction.channel == 'mpesa' else obj.transaction.get_channel_display()
 
     def get_date_paid(self, obj):
         return obj.settled_at.strftime("%d-%m-%Y %H:%M")
