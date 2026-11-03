@@ -2,6 +2,7 @@ services:
   - type: web
     name: geopima-api
     runtime: python
+    plan: free
     rootDir: backend
     buildCommand: ./build.sh
     startCommand: gunicorn geopima_core.wsgi:application --workers 2 --timeout 60
